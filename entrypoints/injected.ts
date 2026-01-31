@@ -1,17 +1,14 @@
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 
-export default defineContentScript({
-  matches: ['<all_urls>'],
-  main() {
-    browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-      if (message.action === 'extract') {
-        const result = extractArticle();
-        sendResponse(result);
-      }
-      return true;
-    });
-  },
+export default defineUnlistedScript(() => {
+  browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message.action === 'extract') {
+      const result = extractArticle();
+      sendResponse(result);
+    }
+    return true;
+  });
 });
 
 function extractArticle(): { title: string; markdown: string } | { error: string } {

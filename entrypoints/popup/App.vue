@@ -8,6 +8,12 @@ async function extractMarkdown(): Promise<{ title: string; markdown: string }> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (!tab.id) throw new Error('No active tab');
 
+  // Inject content script dynamically
+  await browser.scripting.executeScript({
+    target: { tabId: tab.id },
+    files: ['/injected.js'],
+  });
+
   const result = await browser.tabs.sendMessage(tab.id, { action: 'extract' });
 
   if ('error' in result) {

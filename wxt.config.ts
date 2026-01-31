@@ -5,6 +5,6 @@ export default defineConfig({
   manifest: {
     name: 'Mdown',
     description: 'Save web pages as clean Markdown files',
-    permissions: ['activeTab', 'downloads'],
+    permissions: ['activeTab', 'scripting', 'downloads'],
   },
 });
