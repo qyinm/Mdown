@@ -11,16 +11,14 @@ export default defineBackground(() => {
 
 async function downloadMarkdown(title: string, markdown: string): Promise<void> {
   const filename = sanitizeFilename(title) + '.md';
-  const blob = new Blob([markdown], { type: 'text/markdown' });
-  const url = URL.createObjectURL(blob);
+  const base64 = btoa(unescape(encodeURIComponent(markdown)));
+  const dataUrl = `data:text/markdown;base64,${base64}`;
 
   await browser.downloads.download({
-    url,
+    url: dataUrl,
     filename,
     saveAs: true,
   });
-
-  URL.revokeObjectURL(url);
 }
 
 function sanitizeFilename(name: string): string {
