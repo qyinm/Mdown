@@ -1,30 +1,48 @@
 <script lang="ts" setup>
 import { ref } from 'vue';
 
-const status = ref<'idle' | 'loading' | 'success' | 'error'>('idle');
+const status = ref<'idle' | 'loading' | 'copied' | 'saved' | 'error'>('idle');
 const errorMessage = ref('');
 
-async function handleClip() {
+async function extractMarkdown(): Promise<{ title: string; markdown: string }> {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  if (!tab.id) throw new Error('No active tab');
+
+  const result = await browser.tabs.sendMessage(tab.id, { action: 'extract' });
+
+  if ('error' in result) {
+    throw new Error(result.error);
+  }
+
+  return result;
+}
+
+async function handleCopy() {
   status.value = 'loading';
   errorMessage.value = '';
 
   try {
-    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-    if (!tab.id) throw new Error('No active tab');
+    const { markdown } = await extractMarkdown();
+    await navigator.clipboard.writeText(markdown);
+    status.value = 'copied';
+  } catch (e) {
+    status.value = 'error';
+    errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
+  }
+}
 
-    const result = await browser.tabs.sendMessage(tab.id, { action: 'extract' });
+async function handleSave() {
+  status.value = 'loading';
+  errorMessage.value = '';
 
-    if ('error' in result) {
-      throw new Error(result.error);
-    }
-
+  try {
+    const { title, markdown } = await extractMarkdown();
     await browser.runtime.sendMessage({
       action: 'download',
-      title: result.title,
-      markdown: result.markdown,
+      title,
+      markdown,
     });
-
-    status.value = 'success';
+    status.value = 'saved';
   } catch (e) {
     status.value = 'error';
     errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
@@ -37,23 +55,35 @@ async function handleClip() {
     <h1>Mdown</h1>
     <p class="description">Save this page as Markdown</p>
 
-    <button
-      class="clip-button"
-      :disabled="status === 'loading'"
-      @click="handleClip"
-    >
-      <span v-if="status === 'loading'">Extracting...</span>
-      <span v-else>Save as Markdown</span>
-    </button>
+    <div class="buttons">
+      <button
+        class="btn btn-primary"
+        :disabled="status === 'loading'"
+        @click="handleCopy"
+      >
+        <span v-if="status === 'loading'">...</span>
+        <span v-else>Copy</span>
+      </button>
 
-    <p v-if="status === 'success'" class="success">Saved successfully!</p>
+      <button
+        class="btn btn-secondary"
+        :disabled="status === 'loading'"
+        @click="handleSave"
+      >
+        <span v-if="status === 'loading'">...</span>
+        <span v-else>Save</span>
+      </button>
+    </div>
+
+    <p v-if="status === 'copied'" class="success">Copied to clipboard!</p>
+    <p v-if="status === 'saved'" class="success">Saved successfully!</p>
     <p v-if="status === 'error'" class="error">{{ errorMessage }}</p>
   </div>
 </template>
 
 <style scoped>
 .container {
-  width: 280px;
+  width: 240px;
   padding: 20px;
   text-align: center;
 }
@@ -65,30 +95,47 @@ h1 {
 }
 
 .description {
-  margin: 0 0 20px;
+  margin: 0 0 16px;
   color: #666;
   font-size: 14px;
 }
 
-.clip-button {
-  width: 100%;
-  padding: 12px 24px;
-  font-size: 16px;
+.buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  flex: 1;
+  padding: 12px 16px;
+  font-size: 15px;
   font-weight: 600;
-  color: white;
-  background: #4a9eff;
   border: none;
   border-radius: 8px;
   cursor: pointer;
   transition: background 0.2s;
 }
 
-.clip-button:hover:not(:disabled) {
+.btn-primary {
+  color: white;
+  background: #4a9eff;
+}
+
+.btn-primary:hover:not(:disabled) {
   background: #3a8eef;
 }
 
-.clip-button:disabled {
-  background: #ccc;
+.btn-secondary {
+  color: #333;
+  background: #e5e7eb;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #d1d5db;
+}
+
+.btn:disabled {
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
