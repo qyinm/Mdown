@@ -11,6 +11,21 @@ export default defineBackground(() => {
       title: 'Save as Markdown',
       contexts: ['page'],
     });
+    browser.contextMenus.create({
+      id: 'mdown-separator',
+      type: 'separator',
+      contexts: ['page'],
+    });
+    browser.contextMenus.create({
+      id: 'mdown-export-chatgpt',
+      title: 'Export to ChatGPT',
+      contexts: ['page'],
+    });
+    browser.contextMenus.create({
+      id: 'mdown-export-claude',
+      title: 'Export to Claude',
+      contexts: ['page'],
+    });
   });
 
   // Handle context menu clicks
@@ -21,6 +36,10 @@ export default defineBackground(() => {
       await handleCopy(tab.id);
     } else if (info.menuItemId === 'mdown-save') {
       await handleSave(tab.id);
+    } else if (info.menuItemId === 'mdown-export-chatgpt') {
+      await handleExportFromTab(tab.id, 'chatgpt');
+    } else if (info.menuItemId === 'mdown-export-claude') {
+      await handleExportFromTab(tab.id, 'claude');
     }
   });
 
@@ -80,6 +99,19 @@ function sanitizeFilename(name: string): string {
     .replace(/[<>:"/\\|?*]/g, '')
     .replace(/\s+/g, '_')
     .substring(0, 100);
+}
+
+async function handleExportFromTab(tabId: number, target: 'chatgpt' | 'claude'): Promise<void> {
+  await browser.scripting.executeScript({
+    target: { tabId },
+    files: ['/injected.js'],
+  });
+  const result = await browser.tabs.sendMessage(tabId, { action: 'extract' });
+  if ('error' in result) {
+    console.error('Mdown:', result.error);
+    return;
+  }
+  await handleExport(result.markdown, target);
 }
 
 // --- Export to AI chat ---
