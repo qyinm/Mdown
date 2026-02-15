@@ -6,5 +6,9 @@ export default defineConfig({
     name: 'Mdown',
     description: 'Save web pages as clean Markdown files',
     permissions: ['activeTab', 'scripting', 'downloads', 'contextMenus'],
+    host_permissions: [
+      'https://chatgpt.com/*',
+      'https://claude.ai/*',
+    ],
   },
 });

@@ -32,6 +32,13 @@ export default defineBackground(() => {
         .catch((e) => sendResponse({ error: e.message }));
       return true;
     }
+
+    if (message.action === 'export') {
+      handleExport(message.markdown, message.target)
+        .then(() => sendResponse({ success: true }))
+        .catch((e) => sendResponse({ error: e.message }));
+      return true;
+    }
   });
 });
 
@@ -73,4 +80,66 @@ function sanitizeFilename(name: string): string {
     .replace(/[<>:"/\\|?*]/g, '')
     .replace(/\s+/g, '_')
     .substring(0, 100);
+}
+
+// --- Export to AI chat ---
+
+async function handleExport(markdown: string, target: 'chatgpt' | 'claude'): Promise<void> {
+  const url = target === 'chatgpt'
+    ? 'https://chatgpt.com/'
+    : 'https://claude.ai/new';
+
+  const newTab = await browser.tabs.create({ url });
+  if (!newTab.id) throw new Error('Failed to create tab');
+
+  await waitForTabLoad(newTab.id);
+  await sleep(1500);
+
+  await browser.scripting.executeScript({
+    target: { tabId: newTab.id },
+    func: injectContent,
+    args: [markdown, target],
+  });
+}
+
+function waitForTabLoad(tabId: number): Promise<void> {
+  return new Promise((resolve) => {
+    const onUpdated = (id: number, info: { status?: string }) => {
+      if (id === tabId && info.status === 'complete') {
+        browser.tabs.onUpdated.removeListener(onUpdated);
+        resolve();
+      }
+    };
+    browser.tabs.onUpdated.addListener(onUpdated);
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// This function runs in the target tab's page context
+function injectContent(markdown: string, target: string): void {
+  const selectors = target === 'chatgpt'
+    ? ['#prompt-textarea', 'div[contenteditable="true"]', 'textarea']
+    : ['div[contenteditable="true"].ProseMirror', 'div[contenteditable="true"]', 'textarea'];
+
+  let el: HTMLElement | null = null;
+  for (const sel of selectors) {
+    el = document.querySelector(sel);
+    if (el) break;
+  }
+  if (!el) return;
+
+  el.focus();
+
+  if (el.getAttribute('contenteditable') === 'true') {
+    document.execCommand('insertText', false, markdown);
+  } else if (el instanceof HTMLTextAreaElement) {
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype, 'value',
+    )?.set;
+    nativeInputValueSetter?.call(el, markdown);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
 }
