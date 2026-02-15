@@ -5,6 +5,9 @@ export default defineConfig({
   manifest: {
     name: 'Mdown',
     description: 'Save web pages as clean Markdown files',
+    action: {
+      default_title: 'Mdown',
+    },
     permissions: ['activeTab', 'scripting', 'downloads', 'contextMenus'],
     host_permissions: [
       'https://chatgpt.com/*',
