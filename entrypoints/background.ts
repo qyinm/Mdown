@@ -26,6 +26,11 @@ export default defineBackground(() => {
       title: 'Export to Claude',
       contexts: ['page'],
     });
+    browser.contextMenus.create({
+      id: 'mdown-export-gemini',
+      title: 'Export to Gemini',
+      contexts: ['page'],
+    });
   });
 
   // Handle context menu clicks
@@ -40,6 +45,8 @@ export default defineBackground(() => {
       await handleExportFromTab(tab.id, 'chatgpt');
     } else if (info.menuItemId === 'mdown-export-claude') {
       await handleExportFromTab(tab.id, 'claude');
+    } else if (info.menuItemId === 'mdown-export-gemini') {
+      await handleExportFromTab(tab.id, 'gemini');
     }
   });
 
@@ -101,7 +108,7 @@ function sanitizeFilename(name: string): string {
     .substring(0, 100);
 }
 
-async function handleExportFromTab(tabId: number, target: 'chatgpt' | 'claude'): Promise<void> {
+async function handleExportFromTab(tabId: number, target: 'chatgpt' | 'claude' | 'gemini'): Promise<void> {
   await browser.scripting.executeScript({
     target: { tabId },
     files: ['/injected.js'],
@@ -116,10 +123,13 @@ async function handleExportFromTab(tabId: number, target: 'chatgpt' | 'claude'):
 
 // --- Export to AI chat ---
 
-async function handleExport(markdown: string, target: 'chatgpt' | 'claude'): Promise<void> {
-  const url = target === 'chatgpt'
-    ? 'https://chatgpt.com/'
-    : 'https://claude.ai/new';
+async function handleExport(markdown: string, target: 'chatgpt' | 'claude' | 'gemini'): Promise<void> {
+  const urls: Record<string, string> = {
+    chatgpt: 'https://chatgpt.com/',
+    claude: 'https://claude.ai/new',
+    gemini: 'https://gemini.google.com/app',
+  };
+  const url = urls[target];
 
   const newTab = await browser.tabs.create({ url });
   if (!newTab.id) throw new Error('Failed to create tab');
@@ -152,9 +162,12 @@ function sleep(ms: number): Promise<void> {
 
 // This function runs in the target tab's page context
 function injectContent(markdown: string, target: string): void {
-  const selectors = target === 'chatgpt'
-    ? ['#prompt-textarea', 'div[contenteditable="true"]', 'textarea']
-    : ['div[contenteditable="true"].ProseMirror', 'div[contenteditable="true"]', 'textarea'];
+  const selectorMap: Record<string, string[]> = {
+    chatgpt: ['#prompt-textarea', 'div[contenteditable="true"]', 'textarea'],
+    claude: ['div[contenteditable="true"].ProseMirror', 'div[contenteditable="true"]', 'textarea'],
+    gemini: ['div[contenteditable="true"].ql-editor', 'div[contenteditable="true"]', 'textarea'],
+  };
+  const selectors = selectorMap[target] || selectorMap.chatgpt;
 
   let el: HTMLElement | null = null;
   for (const sel of selectors) {

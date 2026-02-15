@@ -2,8 +2,9 @@
 import { ref } from 'vue';
 import IconOpenAI from '@/components/IconOpenAI.vue';
 import IconClaude from '@/components/IconClaude.vue';
+import IconGemini from '@/components/IconGemini.vue';
 
-type Status = 'idle' | 'loading' | 'copied' | 'saved' | 'exported-chatgpt' | 'exported-claude' | 'error';
+type Status = 'idle' | 'loading' | 'copied' | 'saved' | 'exported-chatgpt' | 'exported-claude' | 'exported-gemini' | 'error';
 
 const status = ref<Status>('idle');
 const loadingAction = ref<string>('');
@@ -98,6 +99,25 @@ async function handleExportClaude() {
     errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
   }
 }
+
+async function handleExportGemini() {
+  status.value = 'loading';
+  loadingAction.value = 'gemini';
+  errorMessage.value = '';
+
+  try {
+    const { markdown } = await extractMarkdown();
+    await browser.runtime.sendMessage({
+      action: 'export',
+      markdown,
+      target: 'gemini',
+    });
+    status.value = 'exported-gemini';
+  } catch (e) {
+    status.value = 'error';
+    errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
+  }
+}
 </script>
 
 <template>
@@ -140,7 +160,7 @@ async function handleExportClaude() {
       <span class="divider-text">Export to AI</span>
     </div>
 
-    <div class="actions">
+    <div class="ai-grid">
       <button
         class="btn btn-ai btn-chatgpt"
         :disabled="status === 'loading'"
@@ -160,6 +180,16 @@ async function handleExportClaude() {
         <span v-if="status === 'loading' && loadingAction === 'claude'">Opening...</span>
         <span v-else>Claude</span>
       </button>
+
+      <button
+        class="btn btn-ai btn-gemini"
+        :disabled="status === 'loading'"
+        @click="handleExportGemini"
+      >
+        <IconGemini class="btn-icon" />
+        <span v-if="status === 'loading' && loadingAction === 'gemini'">Opening...</span>
+        <span v-else>Gemini</span>
+      </button>
     </div>
 
     <Transition name="fade">
@@ -178,6 +208,10 @@ async function handleExportClaude() {
       <p v-else-if="status === 'exported-claude'" class="toast success">
         <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
         Opened in Claude
+      </p>
+      <p v-else-if="status === 'exported-gemini'" class="toast success">
+        <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+        Opened in Gemini
       </p>
       <p v-else-if="status === 'error'" class="toast error">
         <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>
@@ -288,6 +322,23 @@ h1 {
   white-space: nowrap;
 }
 
+/* AI button grid */
+.ai-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.ai-grid .btn {
+  flex: unset;
+  padding: 9px 12px;
+  font-size: 12px;
+}
+
+.ai-grid .btn:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 /* AI buttons */
 .btn-ai {
   background: #fafafa;
@@ -306,6 +357,12 @@ h1 {
   background: #fef6f2;
   border-color: #D97757;
   color: #b85c3a;
+}
+
+.btn-gemini:hover:not(:disabled) {
+  background: #eff6ff;
+  border-color: #3186FF;
+  color: #1d5cc7;
 }
 
 /* Toast messages */
