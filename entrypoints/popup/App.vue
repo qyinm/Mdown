@@ -5,12 +5,21 @@ import IconClaude from '@/components/IconClaude.vue';
 import IconGemini from '@/components/IconGemini.vue';
 
 type Status = 'idle' | 'loading' | 'copied' | 'saved' | 'exported-chatgpt' | 'exported-claude' | 'exported-gemini' | 'error';
+type Format = 'markdown' | 'json';
 
 const status = ref<Status>('idle');
+const format = ref<Format>('markdown');
 const loadingAction = ref<string>('');
 const errorMessage = ref('');
 
-async function extractMarkdown(): Promise<{ title: string; markdown: string }> {
+interface ExtractionResult {
+  title: string;
+  markdown: string;
+  markdownWithMeta: string;
+  jsonBody: string;
+}
+
+async function extractMarkdown(): Promise<ExtractionResult> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (!tab.id) throw new Error('No active tab');
 
@@ -25,7 +34,15 @@ async function extractMarkdown(): Promise<{ title: string; markdown: string }> {
     throw new Error(result.error);
   }
 
-  return result;
+  return result as unknown as ExtractionResult;
+}
+
+function getActiveText(result: ExtractionResult): string {
+  return format.value === 'json' ? result.jsonBody : result.markdownWithMeta;
+}
+
+function getFileExt(): string {
+  return format.value === 'json' ? '.json' : '.md';
 }
 
 async function handleCopy() {
@@ -34,8 +51,9 @@ async function handleCopy() {
   errorMessage.value = '';
 
   try {
-    const { markdown } = await extractMarkdown();
-    await navigator.clipboard.writeText(markdown);
+    const result = await extractMarkdown();
+    const text = getActiveText(result);
+    await navigator.clipboard.writeText(text);
     status.value = 'copied';
   } catch (e) {
     status.value = 'error';
@@ -49,11 +67,14 @@ async function handleSave() {
   errorMessage.value = '';
 
   try {
-    const { title, markdown } = await extractMarkdown();
+    const result = await extractMarkdown();
+    const text = getActiveText(result);
+    const ext = getFileExt();
     await browser.runtime.sendMessage({
       action: 'download',
-      title,
-      markdown,
+      title: result.title,
+      content: text,
+      ext,
     });
     status.value = 'saved';
   } catch (e) {
@@ -68,10 +89,10 @@ async function handleExportChatGPT() {
   errorMessage.value = '';
 
   try {
-    const { markdown } = await extractMarkdown();
+    const { markdownWithMeta } = await extractMarkdown();
     await browser.runtime.sendMessage({
       action: 'export',
-      markdown,
+      markdown: markdownWithMeta,
       target: 'chatgpt',
     });
     status.value = 'exported-chatgpt';
@@ -87,10 +108,10 @@ async function handleExportClaude() {
   errorMessage.value = '';
 
   try {
-    const { markdown } = await extractMarkdown();
+    const { markdownWithMeta } = await extractMarkdown();
     await browser.runtime.sendMessage({
       action: 'export',
-      markdown,
+      markdown: markdownWithMeta,
       target: 'claude',
     });
     status.value = 'exported-claude';
@@ -106,10 +127,10 @@ async function handleExportGemini() {
   errorMessage.value = '';
 
   try {
-    const { markdown } = await extractMarkdown();
+    const { markdownWithMeta } = await extractMarkdown();
     await browser.runtime.sendMessage({
       action: 'export',
-      markdown,
+      markdown: markdownWithMeta,
       target: 'gemini',
     });
     status.value = 'exported-gemini';
@@ -125,6 +146,24 @@ async function handleExportGemini() {
     <div class="header">
       <h1>Mdown</h1>
       <p class="description">Save this page as Markdown</p>
+    </div>
+
+    <div class="format-bar">
+      <span class="format-label">Format</span>
+      <div class="format-toggle">
+        <button
+          class="toggle-btn"
+          :class="{ active: format === 'markdown' }"
+          :disabled="status === 'loading'"
+          @click="format = 'markdown'"
+        >Markdown</button>
+        <button
+          class="toggle-btn"
+          :class="{ active: format === 'json' }"
+          :disabled="status === 'loading'"
+          @click="format = 'json'"
+        >JSON</button>
+      </div>
     </div>
 
     <div class="actions">
@@ -244,6 +283,51 @@ h1 {
   margin: 0;
   color: #888;
   font-size: 13px;
+}
+
+/* Format selector */
+.format-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.format-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.format-toggle {
+  display: flex;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.toggle-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  background: transparent;
+  color: #888;
+  transition: all 0.12s ease;
+  line-height: 1;
+}
+
+.toggle-btn.active {
+  background: #333;
+  color: white;
+}
+
+.toggle-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* Action buttons */

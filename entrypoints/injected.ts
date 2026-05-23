@@ -24,7 +24,12 @@ async function copyToClipboard(): Promise<void> {
   await navigator.clipboard.writeText(result.markdown);
 }
 
-function extractArticle(): { title: string; markdown: string } | { error: string } {
+function extractArticle(): {
+  title: string;
+  markdown: string;
+  markdownWithMeta: string;
+  jsonBody: string;
+} | { error: string } {
   try {
     const documentClone = document.cloneNode(true) as Document;
     const reader = new Readability(documentClone);
@@ -41,8 +46,35 @@ function extractArticle(): { title: string; markdown: string } | { error: string
 
     const markdown = turndown.turndown(article.content);
     const title = article.title || document.title || 'Untitled';
+    const url = document.URL;
+    const now = new Date().toISOString();
+    const excerpt = article.excerpt || '';
+    const byline = article.byline || '';
+    const siteName = article.siteName || '';
 
-    return { title, markdown };
+    const markdownWithMeta = [
+      '---',
+      `title: "${title.replace(/"/g, '\\"')}"`,
+      `source: ${url}`,
+      `date: ${now.split('T')[0]}`,
+      byline ? `author: ${byline}` : '',
+      siteName ? `site: ${siteName}` : '',
+      '---',
+      '',
+      markdown,
+    ].filter(Boolean).join('\n');
+
+    const jsonBody = JSON.stringify({
+      title,
+      url,
+      date: now,
+      excerpt,
+      byline,
+      siteName,
+      content: markdown,
+    }, null, 2);
+
+    return { title, markdown, markdownWithMeta, jsonBody };
   } catch (e) {
     return { error: e instanceof Error ? e.message : 'Unknown error' };
   }
