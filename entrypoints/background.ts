@@ -1,3 +1,5 @@
+import { saveArticle, getArticles, deleteArticle, getArticle } from '@/lib/history';
+
 export default defineBackground(() => {
   // Create context menus on install
   browser.runtime.onInstalled.addListener(() => {
@@ -53,7 +55,7 @@ export default defineBackground(() => {
   // Handle messages from popup
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.action === 'download') {
-      downloadMarkdown(message.title, message.markdown)
+      downloadFile(message.title, message.content, message.ext || '.md')
         .then(() => sendResponse({ success: true }))
         .catch((e) => sendResponse({ error: e.message }));
       return true;
@@ -76,7 +78,7 @@ async function handleCopy(tabId: number): Promise<void> {
   await browser.tabs.sendMessage(tabId, { action: 'copy' });
 }
 
-async function handleSave(tabId: number): Promise<void> {
+async function handleSave(tabId: number, pageUrl?: string): Promise<void> {
   await browser.scripting.executeScript({
     target: { tabId },
     files: ['/injected.js'],
@@ -86,13 +88,15 @@ async function handleSave(tabId: number): Promise<void> {
     console.error('Mdown:', result.error);
     return;
   }
-  await downloadMarkdown(result.title, result.markdown);
+  await saveArticle({ title: result.title, url: pageUrl || '', markdown: result.markdown });
+  await downloadFile(result.title, result.markdown);
 }
 
-async function downloadMarkdown(title: string, markdown: string): Promise<void> {
-  const filename = sanitizeFilename(title) + '.md';
-  const base64 = btoa(unescape(encodeURIComponent(markdown)));
-  const dataUrl = `data:text/markdown;base64,${base64}`;
+async function downloadFile(title: string, content: string, ext = '.md'): Promise<void> {
+  const filename = sanitizeFilename(title) + ext;
+  const mimeType = ext === '.json' ? 'application/json' : 'text/markdown';
+  const base64 = btoa(unescape(encodeURIComponent(content)));
+  const dataUrl = `data:${mimeType};base64,${base64}`;
 
   await browser.downloads.download({
     url: dataUrl,
