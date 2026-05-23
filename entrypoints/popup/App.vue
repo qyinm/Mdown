@@ -3,6 +3,8 @@ import { ref } from 'vue';
 import IconOpenAI from '@/components/IconOpenAI.vue';
 import IconClaude from '@/components/IconClaude.vue';
 import IconGemini from '@/components/IconGemini.vue';
+import { isSuccess } from '@/lib/types';
+import type { ExtractionResult, ArticleData } from '@/lib/types';
 
 type Status = 'idle' | 'loading' | 'copied' | 'saved' | 'exported-chatgpt' | 'exported-claude' | 'exported-gemini' | 'error';
 type Format = 'markdown' | 'json';
@@ -12,14 +14,7 @@ const format = ref<Format>('markdown');
 const loadingAction = ref<string>('');
 const errorMessage = ref('');
 
-interface ExtractionResult {
-  title: string;
-  markdown: string;
-  markdownWithMeta: string;
-  jsonBody: string;
-}
-
-async function extractMarkdown(): Promise<ExtractionResult> {
+async function extractMarkdown(): Promise<ArticleData> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (!tab.id) throw new Error('No active tab');
 
@@ -28,16 +23,16 @@ async function extractMarkdown(): Promise<ExtractionResult> {
     files: ['/injected.js'],
   });
 
-  const result = await browser.tabs.sendMessage(tab.id, { action: 'extract' });
+  const result: ExtractionResult = await browser.tabs.sendMessage(tab.id, { action: 'extract' });
 
-  if ('error' in result) {
+  if (!isSuccess(result)) {
     throw new Error(result.error);
   }
 
-  return result as unknown as ExtractionResult;
+  return result;
 }
 
-function getActiveText(result: ExtractionResult): string {
+function getActiveText(result: ArticleData): string {
   return format.value === 'json' ? result.jsonBody : result.markdownWithMeta;
 }
 

@@ -1,5 +1,6 @@
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
+import type { ExtractionResult, ArticleData } from '@/lib/types';
 
 export default defineUnlistedScript(() => {
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -24,12 +25,7 @@ async function copyToClipboard(): Promise<void> {
   await navigator.clipboard.writeText(result.markdown);
 }
 
-function extractArticle(): {
-  title: string;
-  markdown: string;
-  markdownWithMeta: string;
-  jsonBody: string;
-} | { error: string } {
+function extractArticle(): ExtractionResult {
   try {
     const documentClone = document.cloneNode(true) as Document;
     const reader = new Readability(documentClone);
@@ -52,13 +48,17 @@ function extractArticle(): {
     const byline = article.byline || '';
     const siteName = article.siteName || '';
 
+    function yamlValue(v: string): string {
+      return `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    }
+
     const markdownWithMeta = [
       '---',
-      `title: "${title.replace(/"/g, '\\"')}"`,
-      `source: ${url}`,
-      `date: ${now.split('T')[0]}`,
-      byline ? `author: ${byline}` : '',
-      siteName ? `site: ${siteName}` : '',
+      `title: ${yamlValue(title)}`,
+      `source: ${yamlValue(url)}`,
+      `date: ${yamlValue(now.split('T')[0])}`,
+      byline && `author: ${yamlValue(byline)}`,
+      siteName && `site: ${yamlValue(siteName)}`,
       '---',
       '',
       markdown,
@@ -74,7 +74,8 @@ function extractArticle(): {
       content: markdown,
     }, null, 2);
 
-    return { title, markdown, markdownWithMeta, jsonBody };
+    const data: ArticleData = { title, markdown, markdownWithMeta, jsonBody };
+    return data;
   } catch (e) {
     return { error: e instanceof Error ? e.message : 'Unknown error' };
   }
