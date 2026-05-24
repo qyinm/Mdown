@@ -27,7 +27,7 @@ Perfect for [Obsidian](https://obsidian.md), [Logseq](https://logseq.com), [Noti
 ## Installation
 
 ### Chrome Web Store
-Coming soon
+- Install now: [Mdown on Chrome Web Store](https://chromewebstore.google.com/detail/bmebbnpnakgpmmhlkhlaoihcdkfeogch?utm_source=item-share-cb)
 
 ### Manual Installation
 1. Download the latest release
