@@ -7,6 +7,12 @@
 </p>
 
 <p align="center">
+  <a href="https://chromewebstore.google.com/detail/bmebbnpnakgpmmhlkhlaoihcdkfeogch?utm_source=item-share-cb">
+    <img src="https://img.shields.io/chrome-web-store/users/bmebbnpnakgpmmhlkhlaoihcdkfeogch?style=flat-square&logo=googlechrome&logoColor=white&label=users&color=4285F4" alt="Chrome Web Store users">
+  </a>
+</p>
+
+<p align="center">
   <a href="#features">Features</a> •
   <a href="#installation">Installation</a> •
   <a href="#development">Development</a> •
