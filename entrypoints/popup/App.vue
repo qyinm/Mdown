@@ -3,16 +3,24 @@ import { ref } from 'vue';
 import IconOpenAI from '@/components/IconOpenAI.vue';
 import IconClaude from '@/components/IconClaude.vue';
 import IconGemini from '@/components/IconGemini.vue';
-import { isSuccess } from '@/lib/types';
+import { toJsonBody } from '@/lib/types';
 import type { ExtractionResult, ArticleData } from '@/lib/types';
 
-type Status = 'idle' | 'loading' | 'copied' | 'saved' | 'exported-chatgpt' | 'exported-claude' | 'exported-gemini' | 'error';
+type Status = 'idle' | 'loading' | 'success' | 'error';
 type Format = 'markdown' | 'json';
+type ExportTarget = 'chatgpt' | 'claude' | 'gemini';
 
 const status = ref<Status>('idle');
 const format = ref<Format>('markdown');
-const loadingAction = ref<string>('');
+const loadingAction = ref('');
+const successMessage = ref('');
 const errorMessage = ref('');
+
+const aiTargets = [
+  { target: 'chatgpt' as const, label: 'ChatGPT', icon: IconOpenAI, class: 'btn-chatgpt' },
+  { target: 'claude' as const, label: 'Claude', icon: IconClaude, class: 'btn-claude' },
+  { target: 'gemini' as const, label: 'Gemini', icon: IconGemini, class: 'btn-gemini' },
+];
 
 async function extractMarkdown(): Promise<ArticleData> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
@@ -24,115 +32,59 @@ async function extractMarkdown(): Promise<ArticleData> {
   });
 
   const result: ExtractionResult = await browser.tabs.sendMessage(tab.id, { action: 'extract' });
-
-  if (!isSuccess(result)) {
-    throw new Error(result.error);
-  }
-
+  if ('error' in result) throw new Error(result.error);
   return result;
 }
 
 function getActiveText(result: ArticleData): string {
-  return format.value === 'json' ? result.jsonBody : result.markdownWithMeta;
+  return format.value === 'json' ? toJsonBody(result) : result.markdownWithMeta;
 }
 
 function getFileExt(): string {
   return format.value === 'json' ? '.json' : '.md';
 }
 
-async function handleCopy() {
+async function runAction(action: string, fn: () => Promise<string>) {
   status.value = 'loading';
-  loadingAction.value = 'copy';
+  loadingAction.value = action;
   errorMessage.value = '';
-
   try {
-    const result = await extractMarkdown();
-    const text = getActiveText(result);
-    await navigator.clipboard.writeText(text);
-    status.value = 'copied';
+    successMessage.value = await fn();
+    status.value = 'success';
   } catch (e) {
     status.value = 'error';
     errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
   }
+}
+
+async function handleCopy() {
+  await runAction('copy', async () => {
+    const result = await extractMarkdown();
+    await navigator.clipboard.writeText(getActiveText(result));
+    return 'Copied to clipboard';
+  });
 }
 
 async function handleSave() {
-  status.value = 'loading';
-  loadingAction.value = 'save';
-  errorMessage.value = '';
-
-  try {
+  await runAction('save', async () => {
     const result = await extractMarkdown();
-    const text = getActiveText(result);
-    const ext = getFileExt();
     await browser.runtime.sendMessage({
       action: 'download',
       title: result.title,
-      content: text,
-      ext,
+      content: getActiveText(result),
+      ext: getFileExt(),
     });
-    status.value = 'saved';
-  } catch (e) {
-    status.value = 'error';
-    errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
-  }
+    return `Saved as ${getFileExt()} file`;
+  });
 }
 
-async function handleExportChatGPT() {
-  status.value = 'loading';
-  loadingAction.value = 'chatgpt';
-  errorMessage.value = '';
-
-  try {
+async function handleExport(target: ExportTarget) {
+  const label = aiTargets.find((t) => t.target === target)?.label ?? target;
+  await runAction(target, async () => {
     const { markdownWithMeta } = await extractMarkdown();
-    await browser.runtime.sendMessage({
-      action: 'export',
-      markdown: markdownWithMeta,
-      target: 'chatgpt',
-    });
-    status.value = 'exported-chatgpt';
-  } catch (e) {
-    status.value = 'error';
-    errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
-  }
-}
-
-async function handleExportClaude() {
-  status.value = 'loading';
-  loadingAction.value = 'claude';
-  errorMessage.value = '';
-
-  try {
-    const { markdownWithMeta } = await extractMarkdown();
-    await browser.runtime.sendMessage({
-      action: 'export',
-      markdown: markdownWithMeta,
-      target: 'claude',
-    });
-    status.value = 'exported-claude';
-  } catch (e) {
-    status.value = 'error';
-    errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
-  }
-}
-
-async function handleExportGemini() {
-  status.value = 'loading';
-  loadingAction.value = 'gemini';
-  errorMessage.value = '';
-
-  try {
-    const { markdownWithMeta } = await extractMarkdown();
-    await browser.runtime.sendMessage({
-      action: 'export',
-      markdown: markdownWithMeta,
-      target: 'gemini',
-    });
-    status.value = 'exported-gemini';
-  } catch (e) {
-    status.value = 'error';
-    errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
-  }
+    await browser.runtime.sendMessage({ action: 'export', markdown: markdownWithMeta, target });
+    return `Opened in ${label}`;
+  });
 }
 </script>
 
@@ -196,56 +148,23 @@ async function handleExportGemini() {
 
     <div class="ai-grid">
       <button
-        class="btn btn-ai btn-chatgpt"
+        v-for="ai in aiTargets"
+        :key="ai.target"
+        class="btn btn-ai"
+        :class="ai.class"
         :disabled="status === 'loading'"
-        @click="handleExportChatGPT"
+        @click="handleExport(ai.target)"
       >
-        <IconOpenAI class="btn-icon" />
-        <span v-if="status === 'loading' && loadingAction === 'chatgpt'">Opening...</span>
-        <span v-else>ChatGPT</span>
-      </button>
-
-      <button
-        class="btn btn-ai btn-claude"
-        :disabled="status === 'loading'"
-        @click="handleExportClaude"
-      >
-        <IconClaude class="btn-icon" />
-        <span v-if="status === 'loading' && loadingAction === 'claude'">Opening...</span>
-        <span v-else>Claude</span>
-      </button>
-
-      <button
-        class="btn btn-ai btn-gemini"
-        :disabled="status === 'loading'"
-        @click="handleExportGemini"
-      >
-        <IconGemini class="btn-icon" />
-        <span v-if="status === 'loading' && loadingAction === 'gemini'">Opening...</span>
-        <span v-else>Gemini</span>
+        <component :is="ai.icon" class="btn-icon" />
+        <span v-if="status === 'loading' && loadingAction === ai.target">Opening...</span>
+        <span v-else>{{ ai.label }}</span>
       </button>
     </div>
 
     <Transition name="fade">
-      <p v-if="status === 'copied'" class="toast success">
+      <p v-if="status === 'success'" class="toast success">
         <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-        Copied to clipboard
-      </p>
-      <p v-else-if="status === 'saved'" class="toast success">
-        <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-        Saved as .md file
-      </p>
-      <p v-else-if="status === 'exported-chatgpt'" class="toast success">
-        <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-        Opened in ChatGPT
-      </p>
-      <p v-else-if="status === 'exported-claude'" class="toast success">
-        <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-        Opened in Claude
-      </p>
-      <p v-else-if="status === 'exported-gemini'" class="toast success">
-        <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-        Opened in Gemini
+        {{ successMessage }}
       </p>
       <p v-else-if="status === 'error'" class="toast error">
         <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>

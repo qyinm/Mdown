@@ -1,58 +1,31 @@
-import { saveArticle, getArticles, deleteArticle, getArticle } from '@/lib/history';
+import type { ArticleData } from '@/lib/types';
+
+type ExportTarget = 'chatgpt' | 'claude' | 'gemini';
 
 export default defineBackground(() => {
-  // Create context menus on install
   browser.runtime.onInstalled.addListener(() => {
-    browser.contextMenus.create({
-      id: 'mdown-copy',
-      title: 'Copy as Markdown',
-      contexts: ['page'],
-    });
-    browser.contextMenus.create({
-      id: 'mdown-save',
-      title: 'Save as Markdown',
-      contexts: ['page'],
-    });
-    browser.contextMenus.create({
-      id: 'mdown-separator',
-      type: 'separator',
-      contexts: ['page'],
-    });
-    browser.contextMenus.create({
-      id: 'mdown-export-chatgpt',
-      title: 'Export to ChatGPT',
-      contexts: ['page'],
-    });
-    browser.contextMenus.create({
-      id: 'mdown-export-claude',
-      title: 'Export to Claude',
-      contexts: ['page'],
-    });
-    browser.contextMenus.create({
-      id: 'mdown-export-gemini',
-      title: 'Export to Gemini',
-      contexts: ['page'],
-    });
+    browser.contextMenus.create({ id: 'mdown-copy', title: 'Copy as Markdown', contexts: ['page'] });
+    browser.contextMenus.create({ id: 'mdown-save', title: 'Save as Markdown', contexts: ['page'] });
+    browser.contextMenus.create({ id: 'mdown-separator', type: 'separator', contexts: ['page'] });
+    browser.contextMenus.create({ id: 'mdown-export-chatgpt', title: 'Export to ChatGPT', contexts: ['page'] });
+    browser.contextMenus.create({ id: 'mdown-export-claude', title: 'Export to Claude', contexts: ['page'] });
+    browser.contextMenus.create({ id: 'mdown-export-gemini', title: 'Export to Gemini', contexts: ['page'] });
   });
 
-  // Handle context menu clicks
+  const menuHandlers: Record<string, (tabId: number) => Promise<void>> = {
+    'mdown-copy': (tabId) => injectTab(tabId, 'copy').then(() => {}),
+    'mdown-save': handleSave,
+    'mdown-export-chatgpt': (tabId) => handleExportFromTab(tabId, 'chatgpt'),
+    'mdown-export-claude': (tabId) => handleExportFromTab(tabId, 'claude'),
+    'mdown-export-gemini': (tabId) => handleExportFromTab(tabId, 'gemini'),
+  };
+
   browser.contextMenus.onClicked.addListener(async (info, tab) => {
-    if (!tab?.id) return;
-
-    if (info.menuItemId === 'mdown-copy') {
-      await handleCopy(tab.id);
-    } else if (info.menuItemId === 'mdown-save') {
-      await handleSave(tab.id);
-    } else if (info.menuItemId === 'mdown-export-chatgpt') {
-      await handleExportFromTab(tab.id, 'chatgpt');
-    } else if (info.menuItemId === 'mdown-export-claude') {
-      await handleExportFromTab(tab.id, 'claude');
-    } else if (info.menuItemId === 'mdown-export-gemini') {
-      await handleExportFromTab(tab.id, 'gemini');
-    }
+    if (!tab?.id || typeof info.menuItemId !== 'string') return;
+    const handler = menuHandlers[info.menuItemId];
+    if (handler) await handler(tab.id);
   });
 
-  // Handle messages from popup
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.action === 'download') {
       downloadFile(message.title, message.content, message.ext || '.md')
@@ -70,25 +43,24 @@ export default defineBackground(() => {
   });
 });
 
-async function handleCopy(tabId: number): Promise<void> {
+async function injectTab(tabId: number, action: string): Promise<unknown> {
   await browser.scripting.executeScript({
     target: { tabId },
     files: ['/injected.js'],
   });
-  await browser.tabs.sendMessage(tabId, { action: 'copy' });
+  return browser.tabs.sendMessage(tabId, { action });
 }
 
-async function handleSave(tabId: number, pageUrl?: string): Promise<void> {
-  await browser.scripting.executeScript({
-    target: { tabId },
-    files: ['/injected.js'],
-  });
-  const result = await browser.tabs.sendMessage(tabId, { action: 'extract' });
-  if ('error' in result) {
-    console.error('Mdown:', result.error);
+function isArticleData(result: unknown): result is ArticleData {
+  return !!result && typeof result === 'object' && !('error' in result);
+}
+
+async function handleSave(tabId: number): Promise<void> {
+  const result = await injectTab(tabId, 'extract');
+  if (!isArticleData(result)) {
+    console.error('Mdown:', (result as { error?: string })?.error ?? 'Unknown error');
     return;
   }
-  await saveArticle({ title: result.title, url: pageUrl || '', markdown: result.markdown });
   await downloadFile(result.title, result.markdown);
 }
 
@@ -112,34 +84,27 @@ function sanitizeFilename(name: string): string {
     .substring(0, 100);
 }
 
-async function handleExportFromTab(tabId: number, target: 'chatgpt' | 'claude' | 'gemini'): Promise<void> {
-  await browser.scripting.executeScript({
-    target: { tabId },
-    files: ['/injected.js'],
-  });
-  const result = await browser.tabs.sendMessage(tabId, { action: 'extract' });
-  if ('error' in result) {
-    console.error('Mdown:', result.error);
+async function handleExportFromTab(tabId: number, target: ExportTarget): Promise<void> {
+  const result = await injectTab(tabId, 'extract');
+  if (!isArticleData(result)) {
+    console.error('Mdown:', (result as { error?: string })?.error ?? 'Unknown error');
     return;
   }
   await handleExport(result.markdown, target);
 }
 
-// --- Export to AI chat ---
-
-async function handleExport(markdown: string, target: 'chatgpt' | 'claude' | 'gemini'): Promise<void> {
-  const urls: Record<string, string> = {
+async function handleExport(markdown: string, target: ExportTarget): Promise<void> {
+  const urls: Record<ExportTarget, string> = {
     chatgpt: 'https://chatgpt.com/',
     claude: 'https://claude.ai/new',
     gemini: 'https://gemini.google.com/app',
   };
-  const url = urls[target];
 
-  const newTab = await browser.tabs.create({ url });
+  const newTab = await browser.tabs.create({ url: urls[target] });
   if (!newTab.id) throw new Error('Failed to create tab');
 
   await waitForTabLoad(newTab.id);
-  await sleep(1500);
+  await new Promise((r) => setTimeout(r, 1500));
 
   await browser.scripting.executeScript({
     target: { tabId: newTab.id },
@@ -160,11 +125,6 @@ function waitForTabLoad(tabId: number): Promise<void> {
   });
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// This function runs in the target tab's page context
 function injectContent(markdown: string, target: string): void {
   const selectorMap: Record<string, string[]> = {
     chatgpt: ['#prompt-textarea', 'div[contenteditable="true"]', 'textarea'],

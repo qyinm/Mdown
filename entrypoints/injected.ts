@@ -1,12 +1,16 @@
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
-import type { ExtractionResult, ArticleData } from '@/lib/types';
+import type { ExtractionResult } from '@/lib/types';
+
+const turndown = new TurndownService({
+  headingStyle: 'atx',
+  codeBlockStyle: 'fenced',
+});
 
 export default defineUnlistedScript(() => {
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.action === 'extract') {
-      const result = extractArticle();
-      sendResponse(result);
+      sendResponse(extractArticle());
     } else if (message.action === 'copy') {
       copyToClipboard()
         .then(() => sendResponse({ success: true }))
@@ -35,11 +39,6 @@ function extractArticle(): ExtractionResult {
       return { error: 'Could not extract article content' };
     }
 
-    const turndown = new TurndownService({
-      headingStyle: 'atx',
-      codeBlockStyle: 'fenced',
-    });
-
     const markdown = turndown.turndown(article.content);
     const title = article.title || document.title || 'Untitled';
     const url = document.URL;
@@ -64,18 +63,12 @@ function extractArticle(): ExtractionResult {
       markdown,
     ].filter(Boolean).join('\n');
 
-    const jsonBody = JSON.stringify({
+    return {
       title,
-      url,
-      date: now,
-      excerpt,
-      byline,
-      siteName,
-      content: markdown,
-    }, null, 2);
-
-    const data: ArticleData = { title, markdown, markdownWithMeta, jsonBody };
-    return data;
+      markdown,
+      markdownWithMeta,
+      meta: { url, date: now, excerpt, byline, siteName },
+    };
   } catch (e) {
     return { error: e instanceof Error ? e.message : 'Unknown error' };
   }
