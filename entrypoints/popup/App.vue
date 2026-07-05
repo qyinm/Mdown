@@ -3,6 +3,8 @@ import { ref, computed, onMounted, watch } from 'vue';
 import IconOpenAI from '@/components/IconOpenAI.vue';
 import IconClaude from '@/components/IconClaude.vue';
 import IconGemini from '@/components/IconGemini.vue';
+import IconCrosshairSquare from '@/components/IconCrosshairSquare.vue';
+import IconClipboard from '@/components/IconClipboard.vue';
 import {
   buildMarkdownOutput,
   toJsonOutput,
@@ -38,17 +40,31 @@ const propertyFields = computed(() => [
   { icon: 'site', label: 'site', key: 'site' as const, type: 'text' },
 ]);
 
-async function extractMarkdown(): Promise<ArticleData> {
+async function getActiveTab() {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (!tab.id) throw new Error('No active tab');
+  if (!tab?.id) throw new Error('No active tab');
+  return tab;
+}
 
+async function injectScript(tabId: number) {
   await browser.scripting.executeScript({
-    target: { tabId: tab.id },
+    target: { tabId },
     files: ['/injected.js'],
   });
+}
 
-  const result: ExtractionResult = await browser.tabs.sendMessage(tab.id, { action: 'extract' });
+async function extractMarkdown(): Promise<ArticleData> {
+  const tab = await getActiveTab();
+  await injectScript(tab.id!);
+
+  const result: ExtractionResult = await browser.tabs.sendMessage(tab.id!, { action: 'extract' });
   if ('error' in result) throw new Error(result.error);
+  return result;
+}
+
+async function loadPickedResult(tabId: number): Promise<ArticleData | null> {
+  const result = await browser.runtime.sendMessage({ action: 'getPickResult', tabId }) as ArticleData | null;
+  if (!result || 'error' in result) return null;
   return result;
 }
 
@@ -89,10 +105,33 @@ async function loadAndCopy() {
   copied.value = false;
   dirty.value = false;
   try {
-    article.value = await extractMarkdown();
+    const tab = await getActiveTab();
+    const picked = await loadPickedResult(tab.id!);
+    article.value = picked ?? await extractMarkdown();
     syncFromArticle(article.value);
     await copyOutput();
     status.value = 'ready';
+  } catch (e) {
+    status.value = 'error';
+    errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
+  }
+}
+
+async function handleCopyPage() {
+  await runBusy('copy', async () => {
+    clearTimeout(copyTimer);
+    article.value = await extractMarkdown();
+    syncFromArticle(article.value);
+    await copyOutput();
+  });
+}
+
+async function handlePick() {
+  try {
+    const tab = await getActiveTab();
+    await injectScript(tab.id!);
+    browser.tabs.sendMessage(tab.id!, { action: 'startPick' });
+    window.close();
   } catch (e) {
     status.value = 'error';
     errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
@@ -174,6 +213,26 @@ async function handleExport(target: ExportTarget) {
     <header class="top-bar">
       <span class="top-label">Clip preview</span>
       <div class="top-actions">
+        <button
+          class="btn-toolbar"
+          type="button"
+          :disabled="status === 'loading' || status === 'busy'"
+          aria-label="Copy page"
+          @click="handleCopyPage"
+        >
+          <IconClipboard class="toolbar-icon" />
+          <span class="toolbar-tooltip">Copy page</span>
+        </button>
+        <button
+          class="btn-toolbar"
+          type="button"
+          :disabled="status === 'loading' || status === 'busy'"
+          aria-label="Pick area"
+          @click="handlePick"
+        >
+          <IconCrosshairSquare class="toolbar-icon" />
+          <span class="toolbar-tooltip">Pick area</span>
+        </button>
         <span v-if="dirty && status === 'ready'" class="status-badge modified">Modified</span>
         <span v-else-if="copied && status === 'ready'" class="status-badge copied">Copied</span>
         <div class="format-toggle">
@@ -300,6 +359,60 @@ async function handleExport(target: ExportTarget) {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.btn-toolbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  background: transparent;
+  color: #555;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.btn-toolbar:hover:not(:disabled) {
+  background: #f5f5f5;
+  border-color: #ccc;
+  color: #111;
+}
+
+.btn-toolbar:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.toolbar-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.toolbar-tooltip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: #333;
+  border-radius: 5px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  z-index: 10;
+}
+
+.btn-toolbar:hover:not(:disabled) .toolbar-tooltip {
+  opacity: 1;
 }
 
 .status-badge {

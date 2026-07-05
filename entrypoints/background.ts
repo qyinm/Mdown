@@ -2,6 +2,28 @@ import type { ArticleData } from '@/lib/types';
 
 type ExportTarget = 'chatgpt' | 'claude' | 'gemini';
 
+const pickResults = new Map<number, ArticleData>();
+
+async function openPopupForTab(tab: Browser.tabs.Tab): Promise<boolean> {
+  const action = browser.action as typeof browser.action & {
+    openPopup?: (options: { windowId?: number; tabId?: number }) => Promise<void>;
+  };
+  if (!action.openPopup) return false;
+
+  try {
+    if (tab.windowId) {
+      await action.openPopup({ windowId: tab.windowId });
+    } else if (tab.id) {
+      await action.openPopup({ tabId: tab.id });
+    } else {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export default defineBackground(() => {
   browser.runtime.onInstalled.addListener(() => {
     browser.contextMenus.create({ id: 'mdown-copy', title: 'Copy as Markdown', contexts: ['page'] });
@@ -26,7 +48,23 @@ export default defineBackground(() => {
     if (handler) await handler(tab.id);
   });
 
-  browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'pickComplete' && sender.tab?.id) {
+      if (!('error' in message.result)) {
+        pickResults.set(sender.tab.id, message.result);
+        void openPopupForTab(sender.tab);
+      }
+      sendResponse({ success: true });
+      return true;
+    }
+
+    if (message.action === 'getPickResult' && typeof message.tabId === 'number') {
+      const result = pickResults.get(message.tabId) ?? null;
+      pickResults.delete(message.tabId);
+      sendResponse(result);
+      return true;
+    }
+
     if (message.action === 'download') {
       downloadFile(message.title, message.content, message.ext || '.md')
         .then(() => sendResponse({ success: true }))
