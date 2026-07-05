@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue';
 import IconOpenAI from '@/components/IconOpenAI.vue';
 import IconClaude from '@/components/IconClaude.vue';
 import IconGemini from '@/components/IconGemini.vue';
-import IconCrosshairSquare from '@/components/IconCrosshairSquare.vue';
+import IconSquareMousePointer from '@/components/IconSquareMousePointer.vue';
 import IconClipboard from '@/components/IconClipboard.vue';
 import {
   buildMarkdownOutput,
@@ -230,7 +230,7 @@ async function handleExport(target: ExportTarget) {
           aria-label="Pick area"
           @click="handlePick"
         >
-          <IconCrosshairSquare class="toolbar-icon" />
+          <IconSquareMousePointer class="toolbar-icon" />
           <span class="toolbar-tooltip">Pick area</span>
         </button>
         <span v-if="dirty && status === 'ready'" class="status-badge modified">Modified</span>
