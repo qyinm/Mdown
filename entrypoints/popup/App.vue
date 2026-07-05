@@ -1,26 +1,42 @@
 <script lang="ts" setup>
-import { ref } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import IconOpenAI from '@/components/IconOpenAI.vue';
 import IconClaude from '@/components/IconClaude.vue';
 import IconGemini from '@/components/IconGemini.vue';
-import { toJsonBody } from '@/lib/types';
-import type { ExtractionResult, ArticleData } from '@/lib/types';
+import {
+  buildMarkdownOutput,
+  toJsonOutput,
+  fieldsFromArticle,
+} from '@/lib/types';
+import type { ExtractionResult, ArticleData, ClipFields } from '@/lib/types';
 
-type Status = 'idle' | 'loading' | 'success' | 'error';
+type Status = 'loading' | 'ready' | 'error' | 'busy';
 type Format = 'markdown' | 'json';
 type ExportTarget = 'chatgpt' | 'claude' | 'gemini';
 
-const status = ref<Status>('idle');
+const status = ref<Status>('loading');
 const format = ref<Format>('markdown');
-const loadingAction = ref('');
-const successMessage = ref('');
+const busyAction = ref('');
+const copied = ref(false);
+const dirty = ref(false);
 const errorMessage = ref('');
+const article = ref<ArticleData | null>(null);
+const fields = ref<ClipFields>({ title: '', source: '', date: '', description: '', site: '' });
+const previewText = ref('');
+let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
 const aiTargets = [
   { target: 'chatgpt' as const, label: 'ChatGPT', icon: IconOpenAI, class: 'btn-chatgpt' },
   { target: 'claude' as const, label: 'Claude', icon: IconClaude, class: 'btn-claude' },
   { target: 'gemini' as const, label: 'Gemini', icon: IconGemini, class: 'btn-gemini' },
 ];
+
+const propertyFields = computed(() => [
+  { icon: 'source', label: 'source', key: 'source' as const, type: 'url' },
+  { icon: 'created', label: 'created', key: 'date' as const, type: 'date' },
+  { icon: 'description', label: 'description', key: 'description' as const, type: 'text' },
+  { icon: 'site', label: 'site', key: 'site' as const, type: 'text' },
+]);
 
 async function extractMarkdown(): Promise<ArticleData> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
@@ -36,201 +52,284 @@ async function extractMarkdown(): Promise<ArticleData> {
   return result;
 }
 
-function getActiveText(result: ArticleData): string {
-  return format.value === 'json' ? toJsonBody(result) : result.markdownWithMeta;
+function syncFromArticle(data: ArticleData) {
+  fields.value = fieldsFromArticle(data);
+  previewText.value = format.value === 'json' ? toJsonOutput(fields.value, data.markdown) : data.markdown;
+  dirty.value = false;
+}
+
+function getOutputText(): string {
+  if (format.value === 'json') return previewText.value;
+  return buildMarkdownOutput(fields.value, previewText.value);
 }
 
 function getFileExt(): string {
   return format.value === 'json' ? '.json' : '.md';
 }
 
-async function runAction(action: string, fn: () => Promise<string>) {
+async function copyOutput() {
+  if (!article.value) return;
+  await navigator.clipboard.writeText(getOutputText());
+  copied.value = true;
+  dirty.value = false;
+}
+
+function onContentChange() {
+  dirty.value = true;
+  copied.value = false;
+  clearTimeout(copyTimer);
+  copyTimer = setTimeout(() => {
+    copyOutput().catch(() => { copied.value = false; });
+  }, 600);
+}
+
+async function loadAndCopy() {
   status.value = 'loading';
-  loadingAction.value = action;
   errorMessage.value = '';
+  copied.value = false;
+  dirty.value = false;
   try {
-    successMessage.value = await fn();
-    status.value = 'success';
+    article.value = await extractMarkdown();
+    syncFromArticle(article.value);
+    await copyOutput();
+    status.value = 'ready';
   } catch (e) {
     status.value = 'error';
     errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
   }
 }
 
-async function handleCopy() {
-  await runAction('copy', async () => {
-    const result = await extractMarkdown();
-    await navigator.clipboard.writeText(getActiveText(result));
-    return 'Copied to clipboard';
-  });
+onMounted(loadAndCopy);
+
+watch(format, async (_newFmt, oldFmt) => {
+  if (!article.value || status.value !== 'ready' || oldFmt === undefined) return;
+  if (format.value === 'json') {
+    previewText.value = toJsonOutput(fields.value, previewText.value);
+  } else {
+    try {
+      const parsed = JSON.parse(previewText.value) as Record<string, string>;
+      fields.value = {
+        title: parsed.title ?? fields.value.title,
+        source: parsed.url ?? fields.value.source,
+        date: (parsed.date ?? fields.value.date).split('T')[0],
+        description: parsed.excerpt ?? fields.value.description,
+        site: parsed.siteName ?? fields.value.site,
+      };
+      if (typeof parsed.content === 'string') previewText.value = parsed.content;
+    } catch { /* keep markdown body */ }
+  }
+  dirty.value = false;
+  try {
+    await copyOutput();
+  } catch {
+    copied.value = false;
+  }
+});
+
+async function runBusy(action: string, fn: () => Promise<void>) {
+  busyAction.value = action;
+  status.value = 'busy';
+  errorMessage.value = '';
+  try {
+    await fn();
+    status.value = 'ready';
+  } catch (e) {
+    status.value = 'error';
+    errorMessage.value = e instanceof Error ? e.message : 'Unknown error';
+  } finally {
+    busyAction.value = '';
+  }
 }
 
 async function handleSave() {
-  await runAction('save', async () => {
-    const result = await extractMarkdown();
+  if (!article.value) return;
+  await runBusy('save', async () => {
+    clearTimeout(copyTimer);
+    await copyOutput();
     await browser.runtime.sendMessage({
       action: 'download',
-      title: result.title,
-      content: getActiveText(result),
+      title: fields.value.title,
+      content: getOutputText(),
       ext: getFileExt(),
     });
-    return `Saved as ${getFileExt()} file`;
   });
 }
 
 async function handleExport(target: ExportTarget) {
-  const label = aiTargets.find((t) => t.target === target)?.label ?? target;
-  await runAction(target, async () => {
-    const { markdownWithMeta } = await extractMarkdown();
-    await browser.runtime.sendMessage({ action: 'export', markdown: markdownWithMeta, target });
-    return `Opened in ${label}`;
+  if (!article.value) return;
+  await runBusy(target, async () => {
+    clearTimeout(copyTimer);
+    await copyOutput();
+    await browser.runtime.sendMessage({
+      action: 'export',
+      markdown: getOutputText(),
+      target,
+    });
   });
 }
 </script>
 
 <template>
   <div class="container">
-    <div class="header">
-      <h1>Mdown</h1>
-      <p class="description">Save this page as Markdown</p>
-    </div>
-
-    <div class="format-bar">
-      <span class="format-label">Format</span>
-      <div class="format-toggle">
-        <button
-          class="toggle-btn"
-          :class="{ active: format === 'markdown' }"
-          :disabled="status === 'loading'"
-          @click="format = 'markdown'"
-        >Markdown</button>
-        <button
-          class="toggle-btn"
-          :class="{ active: format === 'json' }"
-          :disabled="status === 'loading'"
-          @click="format = 'json'"
-        >JSON</button>
+    <header class="top-bar">
+      <span class="top-label">Clip preview</span>
+      <div class="top-actions">
+        <span v-if="dirty && status === 'ready'" class="status-badge modified">Modified</span>
+        <span v-else-if="copied && status === 'ready'" class="status-badge copied">Copied</span>
+        <div class="format-toggle">
+          <button
+            class="toggle-btn"
+            :class="{ active: format === 'markdown' }"
+            :disabled="status === 'loading' || status === 'busy'"
+            @click="format = 'markdown'"
+          >MD</button>
+          <button
+            class="toggle-btn"
+            :class="{ active: format === 'json' }"
+            :disabled="status === 'loading' || status === 'busy'"
+            @click="format = 'json'"
+          >JSON</button>
+        </div>
       </div>
+    </header>
+
+    <div v-if="status === 'loading'" class="state-box">
+      <div class="spinner" />
+      <p>Extracting page…</p>
     </div>
 
-    <div class="actions">
-      <button
-        class="btn btn-primary"
-        :disabled="status === 'loading'"
-        @click="handleCopy"
+    <div v-else-if="status === 'error'" class="state-box error">
+      <p>{{ errorMessage }}</p>
+      <button class="btn btn-secondary" @click="loadAndCopy">Retry</button>
+    </div>
+
+    <template v-else-if="article">
+      <input
+        v-model="fields.title"
+        class="clip-title"
+        type="text"
+        spellcheck="false"
+        placeholder="Title"
+        @input="onContentChange"
       >
-        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-        </svg>
-        <span v-if="status === 'loading' && loadingAction === 'copy'">Copying...</span>
-        <span v-else>Copy</span>
-      </button>
 
-      <button
-        class="btn btn-secondary"
-        :disabled="status === 'loading'"
-        @click="handleSave"
-      >
-        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-          <polyline points="7 10 12 15 17 10" />
-          <line x1="12" y1="15" x2="12" y2="3" />
-        </svg>
-        <span v-if="status === 'loading' && loadingAction === 'save'">Saving...</span>
-        <span v-else>Save</span>
-      </button>
-    </div>
+      <section v-if="format === 'markdown'" class="properties">
+        <h2 class="section-label">Properties</h2>
+        <dl class="prop-list">
+          <div v-for="prop in propertyFields" :key="prop.label" class="prop-row">
+            <dt class="prop-key">
+              <span class="prop-icon" :data-icon="prop.icon" />
+              {{ prop.label }}
+            </dt>
+            <dd class="prop-value">
+              <input
+                v-model="fields[prop.key]"
+                class="prop-input"
+                :type="prop.type"
+                spellcheck="false"
+                @input="onContentChange"
+              >
+            </dd>
+          </div>
+        </dl>
+      </section>
 
-    <div class="divider">
-      <span class="divider-text">Export to AI</span>
-    </div>
+      <section class="preview">
+        <h2 class="section-label">{{ format === 'json' ? 'JSON' : 'Content' }}</h2>
+        <textarea
+          v-model="previewText"
+          class="preview-body"
+          spellcheck="false"
+          @input="onContentChange"
+        />
+      </section>
 
-    <div class="ai-grid">
-      <button
-        v-for="ai in aiTargets"
-        :key="ai.target"
-        class="btn btn-ai"
-        :class="ai.class"
-        :disabled="status === 'loading'"
-        @click="handleExport(ai.target)"
-      >
-        <component :is="ai.icon" class="btn-icon" />
-        <span v-if="status === 'loading' && loadingAction === ai.target">Opening...</span>
-        <span v-else>{{ ai.label }}</span>
-      </button>
-    </div>
+      <footer class="footer">
+        <button
+          class="btn btn-primary btn-save"
+          :disabled="status === 'busy'"
+          @click="handleSave"
+        >
+          <span v-if="busyAction === 'save'">Saving…</span>
+          <span v-else>Save as {{ getFileExt() }}</span>
+        </button>
 
-    <Transition name="fade">
-      <p v-if="status === 'success'" class="toast success">
-        <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-        {{ successMessage }}
-      </p>
-      <p v-else-if="status === 'error'" class="toast error">
-        <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>
-        {{ errorMessage }}
-      </p>
-    </Transition>
+        <div class="ai-row">
+          <button
+            v-for="ai in aiTargets"
+            :key="ai.target"
+            class="btn btn-ai"
+            :class="ai.class"
+            :disabled="status === 'busy'"
+            @click="handleExport(ai.target)"
+          >
+            <component :is="ai.icon" class="btn-icon" />
+            <span v-if="busyAction === ai.target">…</span>
+            <span v-else>{{ ai.label }}</span>
+          </button>
+        </div>
+      </footer>
+    </template>
   </div>
 </template>
 
 <style scoped>
 .container {
-  width: 260px;
-  padding: 20px;
+  width: 400px;
+  max-height: 560px;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 16px 12px;
 }
 
-/* Header */
-.header {
-  margin-bottom: 16px;
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
-h1 {
-  margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 700;
-  color: #111;
-  letter-spacing: -0.3px;
+.top-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
 }
 
-.description {
-  margin: 0;
-  color: #888;
-  font-size: 13px;
-}
-
-/* Format selector */
-.format-bar {
+.top-actions {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
 }
 
-.format-label {
+.status-badge {
   font-size: 11px;
-  font-weight: 500;
-  color: #999;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.status-badge.copied {
+  color: #16a34a;
+}
+
+.status-badge.modified {
+  color: #d97706;
 }
 
 .format-toggle {
   display: flex;
   border: 1px solid #e0e0e0;
-  border-radius: 8px;
+  border-radius: 6px;
   overflow: hidden;
 }
 
 .toggle-btn {
-  padding: 5px 12px;
-  font-size: 12px;
+  padding: 4px 8px;
+  font-size: 11px;
   font-weight: 600;
   border: none;
   cursor: pointer;
   background: transparent;
   color: #888;
-  transition: all 0.12s ease;
   line-height: 1;
 }
 
@@ -244,14 +343,174 @@ h1 {
   cursor: not-allowed;
 }
 
-/* Action buttons */
-.actions {
+.state-box {
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 48px 16px;
+  color: #888;
+  font-size: 13px;
+}
+
+.state-box.error {
+  color: #dc2626;
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #e8e8e8;
+  border-top-color: #333;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.clip-title {
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 22px;
+  font-weight: 700;
+  color: #111;
+  letter-spacing: -0.3px;
+  line-height: 1.25;
+  flex-shrink: 0;
+}
+
+.clip-title:focus {
+  outline: none;
+}
+
+.clip-title::placeholder {
+  color: #ccc;
+}
+
+.section-label {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.properties {
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+
+.prop-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.prop-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
   gap: 8px;
+  align-items: start;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.prop-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #888;
+  font-weight: 500;
+}
+
+.prop-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.55;
+  background: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+}
+
+.prop-icon[data-icon="title"] { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Cpath d='M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z'/%3E%3Cpath d='M14 2v6h6M16 13H8M16 17H8M10 9H8'/%3E%3C/svg%3E"); }
+.prop-icon[data-icon="source"] { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Cpath d='M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71'/%3E%3Cpath d='M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71'/%3E%3C/svg%3E"); }
+.prop-icon[data-icon="created"] { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cpath d='M16 2v4M8 2v4M3 10h18'/%3E%3C/svg%3E"); }
+.prop-icon[data-icon="description"] { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Cpath d='M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z'/%3E%3Cpath d='M14 2v6h6M16 13H8M16 17H8'/%3E%3C/svg%3E"); }
+.prop-icon[data-icon="site"] { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z'/%3E%3C/svg%3E"); }
+
+.prop-value {
+  margin: 0;
+  min-width: 0;
+}
+
+.prop-input {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid #e8e8e8;
+  border-radius: 5px;
+  background: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #222;
+}
+
+.prop-input:focus {
+  outline: none;
+  border-color: #999;
+}
+
+.preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 12px;
+}
+
+.preview-body {
+  flex: 1;
+  width: 100%;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  background: #fff;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #333;
+  resize: vertical;
+  min-height: 120px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.preview-body:focus {
+  outline: none;
+  border-color: #999;
+}
+
+.footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid #f0f0f0;
 }
 
 .btn {
-  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -262,13 +521,13 @@ h1 {
   border: none;
   border-radius: 10px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease;
   line-height: 1;
 }
 
 .btn-icon {
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
 }
 
@@ -290,59 +549,28 @@ h1 {
   background: #e4e4e4;
 }
 
+.btn-save {
+  width: 100%;
+}
+
 .btn:disabled {
-  opacity: 0.4;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
-/* Divider */
-.divider {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 14px 0;
+.ai-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
 }
 
-.divider::before,
-.divider::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: #e8e8e8;
-}
-
-.divider-text {
+.btn-ai {
+  padding: 8px 6px;
   font-size: 11px;
   font-weight: 500;
-  color: #aaa;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  white-space: nowrap;
-}
-
-/* AI button grid */
-.ai-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.ai-grid .btn {
-  flex: unset;
-  padding: 9px 12px;
-  font-size: 12px;
-}
-
-.ai-grid .btn:last-child:nth-child(odd) {
-  grid-column: 1 / -1;
-}
-
-/* AI buttons */
-.btn-ai {
   background: #fafafa;
   border: 1px solid #e8e8e8;
   color: #444;
-  font-weight: 500;
 }
 
 .btn-chatgpt:hover:not(:disabled) {
@@ -361,44 +589,5 @@ h1 {
   background: #eff6ff;
   border-color: #3186FF;
   color: #1d5cc7;
-}
-
-/* Toast messages */
-.toast {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 12px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
-}
-
-.toast-icon {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-}
-
-.toast.success {
-  background: #f0fdf4;
-  color: #16a34a;
-}
-
-.toast.error {
-  background: #fef2f2;
-  color: #dc2626;
-}
-
-/* Transitions */
-.fade-enter-active {
-  transition: all 0.2s ease;
-}
-
-.fade-enter-from {
-  opacity: 0;
-  transform: translateY(-4px);
 }
 </style>

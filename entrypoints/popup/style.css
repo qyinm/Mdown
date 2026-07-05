@@ -11,5 +11,9 @@ body {
 
 #app {
   display: flex;
-  justify-content: center;
+  justify-content: stretch;
+}
+
+html, body {
+  min-width: 400px;
 }

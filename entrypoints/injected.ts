@@ -44,7 +44,6 @@ function extractArticle(): ExtractionResult {
     const url = document.URL;
     const now = new Date().toISOString();
     const excerpt = article.excerpt || '';
-    const byline = article.byline || '';
     const siteName = article.siteName || '';
 
     function yamlValue(v: string): string {
@@ -56,7 +55,7 @@ function extractArticle(): ExtractionResult {
       `title: ${yamlValue(title)}`,
       `source: ${yamlValue(url)}`,
       `date: ${yamlValue(now.split('T')[0])}`,
-      byline && `author: ${yamlValue(byline)}`,
+      excerpt && `description: ${yamlValue(excerpt)}`,
       siteName && `site: ${yamlValue(siteName)}`,
       '---',
       '',
@@ -67,7 +66,7 @@ function extractArticle(): ExtractionResult {
       title,
       markdown,
       markdownWithMeta,
-      meta: { url, date: now, excerpt, byline, siteName },
+      meta: { url, date: now, excerpt, siteName },
     };
   } catch (e) {
     return { error: e instanceof Error ? e.message : 'Unknown error' };
